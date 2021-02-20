@@ -10,6 +10,7 @@ use BackblazeB2\Exceptions\BucketNotEmptyException;
 use BackblazeB2\Exceptions\FileNotPresentException;
 use BackblazeB2\Exceptions\NotFoundException;
 use BackblazeB2\Exceptions\UnauthorizedAccessException;
+use BackblazeB2\Exceptions\ServiceUnavailableException;
 use GuzzleHttp\Psr7\Response;
 
 class ErrorHandler
@@ -22,6 +23,7 @@ class ErrorHandler
         'file_not_present'               => FileNotPresentException::class,
         'cannot_delete_non_empty_bucket' => BucketNotEmptyException::class,
         'unauthorized'                   => UnauthorizedAccessException::class,
+        'service_unavailable'            => ServiceUnavailableException::class,
     ];
 
     /**
@@ -29,7 +31,7 @@ class ErrorHandler
      *
      * @throws B2Exception
      */
-    public static function handleErrorResponse(Response $response)
+    public static function handleErrorResponse(Response $response, $request_options)
     {
         $responseJson = json_decode($response->getBody(), true);
 
@@ -40,6 +42,7 @@ class ErrorHandler
             $exceptionClass = B2Exception::class;
         }
 
-        throw new $exceptionClass('Received error from B2: '.$responseJson['message']);
+        throw new $exceptionClass('Received error from B2: '.$responseJson['message'] . ' with code: ' . $responseJson['code'] . 
+         $request_options['headers']['X-Bz-File-Name' ]);
     }
 }

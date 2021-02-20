@@ -12,7 +12,8 @@ use GuzzleHttp\Exception\GuzzleException;
 class Client
 {
     const B2_API_BASE_URL = 'https://api.backblazeb2.com';
-    const B2_API_V1 = '/b2api/v1/';
+    const B2_API = '/b2api/v2/';
+    protected $application_key_id;
     protected $accountId;
     protected $applicationKey;
     protected $authToken;
@@ -21,19 +22,21 @@ class Client
     protected $client;
     protected $reAuthTime;
     protected $authTimeoutSeconds;
+    private $upload_url;
+    private $upload_auth;
 
     /**
      * Accepts the account ID, application key and an optional array of options.
      *
-     * @param $accountId
+     * @param $application_key_id
      * @param $applicationKey
      * @param array $options
      *
      * @throws \Exception
      */
-    public function __construct($accountId, $applicationKey, array $options = [])
+    public function __construct($application_key_id, $applicationKey, array $options = [])
     {
-        $this->accountId = $accountId;
+        $this->application_key_id = $application_key_id;
         $this->applicationKey = $applicationKey;
 
         $this->authTimeoutSeconds = 12 * 60 * 60; // 12 hour default
@@ -48,6 +51,8 @@ class Client
         if (isset($options['client'])) {
             $this->client = $options['client'];
         }
+        
+        $this->authorizeAccount();
     }
 
     /**
@@ -118,12 +123,13 @@ class Client
      *
      * @return array
      */
-    public function listBuckets()
+    public function listBuckets(string $bucket_name)
     {
         $buckets = [];
 
         $response = $this->sendAuthorizedRequest('POST', 'b2_list_buckets', [
             'accountId' => $this->accountId,
+          'bucketName'=>$bucket_name
         ]);
 
         foreach ($response['buckets'] as $bucket) {
@@ -179,14 +185,15 @@ class Client
         }
 
         // Retrieve the URL that we should be uploading to.
+        if(!$this->upload_auth){
+          $response = $this->sendAuthorizedRequest('POST', 'b2_get_upload_url', [
+              'bucketId' => $options['BucketId'],
+          ]);
 
-        $response = $this->sendAuthorizedRequest('POST', 'b2_get_upload_url', [
-            'bucketId' => $options['BucketId'],
-        ]);
-
-        $uploadEndpoint = $response['uploadUrl'];
-        $uploadAuthToken = $response['authorizationToken'];
-
+          $this->upload_url = $response['uploadUrl'];
+          $this->upload_auth = $response['authorizationToken'];
+        }
+        
         if (is_resource($options['Body'])) {
             // We need to calculate the file's hash incrementally from the stream.
             $context = hash_init('sha1');
@@ -213,12 +220,12 @@ class Client
         }
 
         $customHeaders = $options['Headers'] ?? [];
-        $response = $this->client->guzzleRequest('POST', $uploadEndpoint, [
+        $response = $this->client->guzzleRequest('POST', $this->upload_url, [
             'headers' => array_merge([
-                'Authorization'                      => $uploadAuthToken,
+                'Authorization'                      => $this->upload_auth,
                 'Content-Type'                       => $options['FileContentType'],
                 'Content-Length'                     => $size,
-                'X-Bz-File-Name'                     => $options['FileName'],
+                'X-Bz-File-Name'                     => urlencode($options['FileName']),
                 'X-Bz-Content-Sha1'                  => $hash,
                 'X-Bz-Info-src_last_modified_millis' => $options['FileLastModified'],
             ], $customHeaders),
@@ -365,8 +372,6 @@ class Client
             $maxFileCount = 1;
         }
 
-        $this->authorizeAccount();
-
         // B2 returns, at most, 1000 files per "page". Loop through the pages and compile an array of File objects.
         while (true) {
             $response = $this->sendAuthorizedRequest('POST', 'b2_list_file_names', [
@@ -380,7 +385,17 @@ class Client
             foreach ($response['files'] as $file) {
                 // if we have a file name set, only retrieve information if the file name matches
                 if (!$fileName || ($fileName === $file['fileName'])) {
-                    $files[] = new File($file['fileId'], $file['fileName'], null, $file['size']);
+                    $files[] = new File(
+                        $file['fileId'],
+                        $file['fileName'],
+                        $file['contentSha1'],
+                        $file['contentLength'],
+                      null,//   $file['contentType'],
+                         $file['fileInfo'],
+                        $file['bucketId'],
+                      null,//  $file['action'],
+                       null,//  $file['uploadTimestamp'],
+                      );
                 }
             }
 
@@ -511,8 +526,6 @@ class Client
             $options['BucketName'] = $this->getBucketNameFromId($options['BucketId']);
         }
 
-        $this->authorizeAccount();
-
         if (isset($options['FileId'])) {
             $requestUri = $this->downloadUrl.'/b2api/v1/b2_download_file_by_id?fileId='.urlencode($options['FileId']);
         } else {
@@ -534,12 +547,13 @@ class Client
             return;
         }
 
-        $response = $this->client->guzzleRequest('GET', self::B2_API_BASE_URL.self::B2_API_V1.'/b2_authorize_account', [
-            'auth' => [$this->accountId, $this->applicationKey],
+        $response = $this->client->guzzleRequest('GET', self::B2_API_BASE_URL.self::B2_API.'/b2_authorize_account', [
+            'auth' => [$this->application_key_id, $this->applicationKey],
         ]);
-
+        
+        $this->accountId = $response['accountId'];
         $this->authToken = $response['authorizationToken'];
-        $this->apiUrl = $response['apiUrl'].self::B2_API_V1;
+        $this->apiUrl = $response['apiUrl'].self::B2_API;
         $this->downloadUrl = $response['downloadUrl'];
         $this->reAuthTime = Carbon::now('UTC');
         $this->reAuthTime->addSeconds($this->authTimeoutSeconds);
@@ -554,7 +568,7 @@ class Client
      */
     protected function getBucketIdFromName($name)
     {
-        $buckets = $this->listBuckets();
+        $buckets = $this->listBuckets($name);
 
         foreach ($buckets as $bucket) {
             if ($bucket->getName() === $name) {
@@ -626,8 +640,6 @@ class Client
         if (!isset($options['FileContentType'])) {
             $options['FileContentType'] = 'b2/x-auto';
         }
-
-        $this->authorizeAccount();
 
         // 1) b2_start_large_file, (returns fileId)
         $start = $this->startLargeFile($options['FileName'], $options['FileContentType'], $options['BucketId']);
@@ -790,8 +802,6 @@ class Client
      */
     protected function sendAuthorizedRequest($method, $route, $json = [])
     {
-        $this->authorizeAccount();
-
         return $this->client->guzzleRequest($method, $this->apiUrl.$route, [
             'headers' => [
                 'Authorization' => $this->authToken,

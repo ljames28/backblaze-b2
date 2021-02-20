@@ -31,7 +31,7 @@ class Client extends GuzzleClient
         $response = parent::request($method, $uri, $options);
 
         if ($response->getStatusCode() !== 200) {
-            ErrorHandler::handleErrorResponse($response);
+            ErrorHandler::handleErrorResponse($response,$options);
         }
 
         if ($asJson) {

@@ -71,7 +71,7 @@ class File implements \JsonSerializable
      */
     public function getName()
     {
-        return $this->name;
+        return '/' . urldecode($this->name);
     }
 
     /**
