@@ -356,9 +356,13 @@ class Client
         $fileName = !empty($options['FileName']) ? $options['FileName'] : null;
 
         $nextFileName = null;
-        $maxFileCount = 1000;
+        $maxFileCount = 10000;
 
         $prefix = isset($options['Prefix']) ? $options['Prefix'] : '';
+        // Clean the path if it starts with /.
+        if (substr($prefix, 0, 1) === '/') {
+           $prefix = ltrim($prefix, '/');
+        }
         $delimiter = isset($options['Delimiter']) ? $options['Delimiter'] : null;
 
         $files = [];
@@ -372,7 +376,7 @@ class Client
             $maxFileCount = 1;
         }
 
-        // B2 returns, at most, 1000 files per "page". Loop through the pages and compile an array of File objects.
+        // B2 returns, at most, 10000 files per "page". Loop through the pages and compile an array of File objects.
         while (true) {
             $response = $this->sendAuthorizedRequest('POST', 'b2_list_file_names', [
                 'bucketId'      => $options['BucketId'],
@@ -503,6 +507,29 @@ class Client
         $this->sendAuthorizedRequest('POST', 'b2_delete_file_version', [
             'fileName' => $options['FileName'],
             'fileId'   => $options['FileId'],
+        ]);
+
+        return true;
+    }
+    
+    /**
+     * Hides the file identified by ID from Backblaze B2.
+     *
+     * @param array $options
+     *
+     * @throws GuzzleException
+     * @throws NotFoundException
+     * @throws GuzzleException   If the request fails.
+     * @throws B2Exception       If the B2 server replies with an error.
+     *
+     * @return bool
+     */
+    public function hideFile(array $options)
+    {
+
+        $this->sendAuthorizedRequest('POST', 'b2_hide_file', [
+            'fileName' => $options['FileName'],
+            'bucketId' => $options['BucketId'],
         ]);
 
         return true;
